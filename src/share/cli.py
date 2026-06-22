@@ -9,6 +9,7 @@ import sys
 from share.upload import add_upload_parser
 from share.create import add_create_parser
 
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="share", description="Dropbox 共有リンク発行ツール")
     sub = parser.add_subparsers(dest="command", required=True)
