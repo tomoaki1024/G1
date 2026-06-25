@@ -1,74 +1,51 @@
+"""共有リンク削除コマンド."""
+
+from __future__ import annotations
+
 import argparse
-from types import SimpleNamespace
-from unittest.mock import Mock
+from pathlib import Path, PureWindowsPath
 
-from share import remove
-
-
-def _args(filepath: str) -> argparse.Namespace:
-    return argparse.Namespace(filepath=filepath)
+from share.client import get_client
 
 
-def test_to_dropbox_path_keeps_posix_path():
-    assert remove._to_dropbox_path("/docs/report.txt") == "/docs/report.txt"
+def _to_dropbox_path(filepath: str) -> str:
+    """OSごとの差を吸収してDropbox API用のパスへ変換する."""
+    path = Path(filepath).expanduser()
+    path_text = str(path)
+    if "\\" in path_text:
+        return PureWindowsPath(path_text).as_posix()
+    return path.as_posix()
 
 
-def test_to_dropbox_path_converts_windows_separator():
-    assert remove._to_dropbox_path(r"\docs\report.txt") == "/docs/report.txt"
+def remove_shared_link(args: argparse.Namespace) -> int:
+    """指定されたファイルの共有リンクを削除する."""
+    print("----------------------------------------")
+    print("共有停止コマンドが呼び出されました")
+    print(f" 対象ファイル: {args.filepath}")
+    print("----------------------------------------")
 
+    target_path = _to_dropbox_path(args.filepath)
+    dbx = get_client()
+    if dbx is None:
+        print("認証情報が見つかりません。先にログインしてください。")
+        return 1
 
-def test_remove_shared_link_returns_1_when_not_authenticated(monkeypatch, capsys):
-    monkeypatch.setattr(remove, "get_client", lambda: None)
+    try:
+        print(f"Dropbox上の {target_path} のリンクを検索中...")
+        response = dbx.sharing_list_shared_links(
+            path=target_path,
+            direct_only=True,
+        )
 
-    result = remove.remove_shared_link(_args("/docs/report.txt"))
+        if not response.links:
+            print("共有リンクが見つかりません。")
+            return 1
 
-    assert result == 1
-    assert "認証情報が見つかりません" in capsys.readouterr().out
+        shared_url = response.links[0].url
+        dbx.sharing_revoke_shared_link(url=shared_url)
+        print("共有を無事に停止しました！")
+        return 0
 
-
-def test_remove_shared_link_revokes_first_found_link(monkeypatch, capsys):
-    dbx = SimpleNamespace()
-    response = SimpleNamespace(links=[SimpleNamespace(url="https://dbx.example/shared")])
-    dbx.sharing_list_shared_links = Mock(return_value=response)
-    dbx.sharing_revoke_shared_link = Mock()
-    monkeypatch.setattr(remove, "get_client", lambda: dbx)
-
-    result = remove.remove_shared_link(_args("/docs/report.txt"))
-
-    assert result == 0
-    dbx.sharing_list_shared_links.assert_called_once_with(
-        path="/docs/report.txt",
-        direct_only=True,
-    )
-    dbx.sharing_revoke_shared_link.assert_called_once_with(
-        url="https://dbx.example/shared",
-    )
-    assert "共有を無事に停止しました" in capsys.readouterr().out
-
-
-def test_remove_shared_link_returns_1_when_link_is_not_found(monkeypatch, capsys):
-    dbx = SimpleNamespace()
-    dbx.sharing_list_shared_links = Mock(
-        return_value=SimpleNamespace(links=[]),
-    )
-    dbx.sharing_revoke_shared_link = Mock()
-    monkeypatch.setattr(remove, "get_client", lambda: dbx)
-
-    result = remove.remove_shared_link(_args("/docs/report.txt"))
-
-    assert result == 1
-    dbx.sharing_revoke_shared_link.assert_not_called()
-    assert "共有リンクが見つかりません" in capsys.readouterr().out
-
-
-def test_remove_shared_link_returns_1_when_dropbox_api_fails(monkeypatch, capsys):
-    dbx = SimpleNamespace()
-    dbx.sharing_list_shared_links = Mock(side_effect=RuntimeError("api error"))
-    dbx.sharing_revoke_shared_link = Mock()
-    monkeypatch.setattr(remove, "get_client", lambda: dbx)
-
-    result = remove.remove_shared_link(_args("/docs/report.txt"))
-
-    assert result == 1
-    dbx.sharing_revoke_shared_link.assert_not_called()
-    assert "エラーが発生しました: api error" in capsys.readouterr().out
+    except Exception as e:
+        print(f"エラーが発生しました: {e}")
+        return 1
