@@ -198,3 +198,32 @@ def test_large_file_session_uses_dropbox_path_and_mode(tmp_path, monkeypatch):
     assert isinstance(commit, CommitInfo)
     assert commit.path == "/dir/dest.bin"
     assert commit.mode == WriteMode("overwrite")
+
+
+def test_cmd_upload_reports_progress(capsys):
+    """cmd_upload が on_progress 経由で進捗を表示する."""
+    import argparse
+    from unittest.mock import MagicMock, patch
+
+    mock_metadata = MagicMock()
+    mock_metadata.path_display = "/large.bin"
+
+    def fake_upload(dbx, local_path, dropbox_path, *, overwrite, on_progress):
+        # 途中経過と完了の両方を通知し、進捗表示処理を実行させる。
+        on_progress(50, 100)
+        on_progress(100, 100)
+        return mock_metadata
+
+    with patch("share.client.get_client", return_value=MagicMock()):
+        with patch("share.upload.upload_file", side_effect=fake_upload):
+            args = argparse.Namespace(
+                local_path="large.bin",
+                dropbox_path=None,
+                overwrite=False,
+            )
+            result = cmd_upload(args)
+
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "50%" in out
+    assert "100%" in out
